@@ -1,0 +1,12 @@
+{
+  "name": "path-normalizer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node cli.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
