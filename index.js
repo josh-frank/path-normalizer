@@ -1,3 +1,5 @@
+const { arcToCubicBeziers } = require("./arcToCubicBeziers");
+
 const round = ( value, decimals ) => Math.round( value * ( decimals ** 100 ) ) / ( decimals ** 100 );
 
 class PathParser {
@@ -70,7 +72,7 @@ class PathParser {
     }
 
     static parseRaw( path ) {
-        let cursor = 0, parsedComponents = [];
+        let cursor = 0, parsedParameters = [];
         while ( cursor < path.length ) {
             const match = path.slice( cursor ).match( this.validCommand );
             if ( match !== null ) {
@@ -78,14 +80,105 @@ class PathParser {
                 cursor += match[ 0 ].length;
                 const componentList = PathParser.parseComponents( command, path, cursor );
                 cursor = componentList[ 0 ];
-                parsedComponents = [ ...parsedComponents, ...componentList[1] ];
+                parsedParameters = [ ...parsedParameters, ...componentList[ 1 ] ];
             } else {
                 throw new Error(  `Invalid path: first error at char ${ cursor }`  );
             }
         }
-        return parsedComponents;
+        return parsedParameters;
     }
 
 }
 
-module.exports = { PathParser };
+class NormalizedPath {
+
+    constructor( descriptor ) {
+        this.parse( descriptor );
+    }
+
+    parse( descriptor ) {
+        let quadX, quadY, bezierX, bezierY, previousCommand = "", previousPoint = [ 0, 0 ];
+        const isRelative = command => command[ 0 ] === command[ 0 ].toLowerCase();
+        const updatePrevious = command => {
+            previousCommand = command[ 0 ];
+            if ( command[ 0 ].toLowerCase () === "h" ) previousPoint[ 0 ] = isRelative( command ) ? previousPoint[ 0 ] + command[ 1 ] : command[ 1 ];
+            else if ( command[ 0 ].toLowerCase () === "v" ) previousPoint[ 1 ] = isRelative( command ) ? previousPoint[ 1 ] + command[ 1 ] : command[ 1 ];
+            else {
+                previousPoint = isRelative( command ) ? [ previousPoint[ 0 ] + command[ command.length - 2 ], previousPoint[ 1 ] + command[ command.length - 1 ] ] : command.slice( command.length - 2 );
+            }
+        };
+        this.parsedCommands = PathParser.parseRaw( descriptor ).reduce( ( result, command, index ) => {
+            let normalizedCommand;
+            switch ( command[ 0 ] ) {
+                case "M":
+                    if ( !index ) normalizedCommand = command;
+                    else normalizedCommand = [ "C", ...previousPoint, ...command.slice( 1 ), ...command.slice( 1 ) ];
+                    break;
+                case "H":
+                    normalizedCommand = [ "C", ...previousPoint, command[ 1 ], previousPoint[ 1 ], command[ 1 ], previousPoint[ 1 ] ];
+                    break;
+                case "V":
+                    normalizedCommand = [ "C", ...previousPoint, 0, command[ 1 ], 0, command[ 1 ] ];
+                    break;
+                case "L":
+                    normalizedCommand = [ "C", ...previousPoint, ...command.slice( 1 ), ...command.slice( 1 ) ];
+                    break;
+                case "S": 
+                    let [ cx, cy ] = previousPoint;
+                    if ( [ "c", "s" ].includes( previousCommand.toLowerCase() ) ) {
+                        cx += cx - bezierX;
+                        cy += cy - bezierY;
+                    }
+                    normalizedCommand = [ "C", cx, cy, command[ 1 ], command[ 2 ], command[ 3 ], command[ 4 ] ];
+                    break;
+                case "Q":
+                    quadX = command[ 1 ];
+                    quadY = command[ 2 ];
+                    normalizedCommand = [ "C",
+                        previousPoint[ 0 ] / 3 + ( 2 / 3 ) * command[ 1 ],
+                        previousPoint[ 1 ] / 3 + ( 2 / 3 ) * command[ 2 ],
+                        command[ 3 ] / 3 + ( 2 / 3 ) * command[ 1 ],
+                        command[ 4 ] / 3 + ( 2 / 3 ) * command[ 2 ],
+                        command[ 3 ],
+                        command[ 4 ]
+                    ];
+                    break;
+                case "T":
+                    if ( [ "q", "t" ].includes( command[ 0 ].toLowerCase() ) ) {
+                        quadX = previousPoint[ 0 ] * 2 - quadX;
+                        quadY = previousPoint[ 1 ] * 2 - quadY;
+                    } else {
+                        quadX = previousPoint[ 0 ];
+                        quadY = previousPoint[ 1 ];
+                    }
+                    normalizedCommand = [
+                        previousPoint[ 0 ] / 3 + ( 2 / 3 ) * quadX,
+                        previousPoint[ 1 ] / 3 + ( 2 / 3 ) * quadY,
+                        command[ 1 ] / 3 + ( 2 / 3 ) * quadX,
+                        command[ 2 ] / 3 + ( 2 / 3 ) * quadY,
+                        command[ 1 ],
+                        command[ 2 ]
+                    ];
+                    break;
+                case "A":
+                    normalizedCommand = [ "C", ...arcToCubicBeziers( previousPoint, command.slice( 1 ) ) ];
+                    break;
+                case "C":
+                    normalizedCommand = command;
+                    break;
+                case "Z":
+                    normalizedCommand = [ "Z" ];
+                    break;
+                default: break;
+            }
+            [ bezierX, bezierY ] = command.length > 4 ? [ command[ command.length - 4 ], command[ command.length - 3 ] ] : [ previousPoint[ 0 ], previousPoint[ 1 ] ];
+            updatePrevious( command );
+            return [ ...result, normalizedCommand ];
+        }, [] );
+    }
+
+    toString() { return this.parsedCommands.flat().join( " " ); }
+
+}
+
+module.exports = { PathParser, NormalizedPath };
